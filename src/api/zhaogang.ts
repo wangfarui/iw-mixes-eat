@@ -20,8 +20,13 @@ import type {
 } from '@/types/zhaogang'
 import type { ZhaogangReleaseReceipt } from '@/types/zhaogangRelease'
 import type { ZgK8sEnvironment } from '@/types/zhaogangService'
-import type { ZhaogangAiConfigCommand, ZhaogangAiConfigStatus, ZhaogangAgentTicket } from '@/types/zhaogangAi'
-import type { ZhaogangReleaseBatchAddResult, ZhaogangReleaseImportPreview, ZhaogangReleaseRecognizedRow } from '@/types/zhaogangReleaseImport'
+import type { ZhaogangAiConfigCommand, ZhaogangAiConfigStatus, ZhaogangAiConnectionTestResult, ZhaogangAgentTicket } from '@/types/zhaogangAi'
+import type {
+  ZhaogangReleaseBatchAddResult,
+  ZhaogangReleaseImportPreview,
+  ZhaogangReleaseImportTask,
+  ZhaogangReleaseRecognizedRow,
+} from '@/types/zhaogangReleaseImport'
 import { dispatchZhaogangPermissionPrompt, permissionPromptFrom } from '@/services/zhaogangPermissionPrompt'
 
 const API_ROOT = `${import.meta.env.VITE_BUILD_ENV === 'prod' ? '//api.itwray.com' : ''}/external-service/api/zhaogang`
@@ -112,7 +117,11 @@ export const saveZhaogangAiConfig = (command: ZhaogangAiConfigCommand) => zhaoga
 
 export const clearZhaogangAiConfig = () => zhaogangRequest<ZhaogangAiConfigStatus>('/ai/config', { method: 'DELETE' })
 
-export const testZhaogangAiConfig = (command?: ZhaogangAiConfigCommand) => zhaogangRequest<string>('/ai/config/test', {
+export const testZhaogangAiConfig = (command?: ZhaogangAiConfigCommand) => zhaogangRequest<ZhaogangAiConnectionTestResult>('/ai/config/test', {
+  method: 'POST', body: command ? JSON.stringify(command) : undefined
+})
+
+export const issueZhaogangAiTestTicket = (command?: ZhaogangAiConfigCommand) => zhaogangRequest<ZhaogangAgentTicket>('/ai/config/test-ticket', {
   method: 'POST', body: command ? JSON.stringify(command) : undefined
 })
 
@@ -134,6 +143,29 @@ export const recognizeZhaogangReleaseImage = (
     method: 'POST', body: form
   })
 }
+
+export const createZhaogangReleaseImageTask = (
+  iterationId: number,
+  file: File,
+  projectColumnName: string,
+  planColumnName: string,
+) => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('projectColumnName', projectColumnName)
+  form.append('planColumnName', planColumnName)
+  return zhaogangRequest<ZhaogangReleaseImportTask>(`/iterations/${iterationId}/release-import/recognize-tasks`, {
+    method: 'POST', body: form
+  })
+}
+
+export const getZhaogangReleaseImageTask = (iterationId: number, taskId: string) =>
+  zhaogangRequest<ZhaogangReleaseImportTask>(`/iterations/${iterationId}/release-import/recognize-tasks/${encodeURIComponent(taskId)}`)
+
+export const cancelZhaogangReleaseImageTask = (iterationId: number, taskId: string) =>
+  zhaogangRequest<ZhaogangReleaseImportTask>(`/iterations/${iterationId}/release-import/recognize-tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE'
+  })
 
 export const matchZhaogangReleaseRows = (iterationId: number, items: ZhaogangReleaseRecognizedRow[]) =>
   zhaogangRequest<ZhaogangReleaseImportPreview>(`/iterations/${iterationId}/release-import/match`, {

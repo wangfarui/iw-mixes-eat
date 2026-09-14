@@ -1,12 +1,12 @@
 {
   "agentName": "zg-workbench-agent",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "protocolVersion": 2,
-  "releaseNotes": "升级到 zg-workbench-agent 2.0.0，首次启动会自动迁移旧安装、配置、自启和协议。",
+  "releaseNotes": "升级到 zg-workbench-agent 2.0.2，修复本地开发票据兑换误报配置缺失，并继续迁移旧安装、配置、自启和协议。",
   "platforms": {
-    "darwin-arm64": { "url": "../zg-workbench-agent/zg-workbench-agent-darwin-arm64.bin", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-darwin-arm64.zip", "sha256": "9ff4a2f0000ecb65a92f83a0a31f273702e9f3f47b2d4a72efdbc229bacf784d" },
-    "darwin-amd64": { "url": "../zg-workbench-agent/zg-workbench-agent-darwin-amd64.bin", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-darwin-amd64.zip", "sha256": "7d1d9ecf2f274588aeb743c7b27a85d2703706fa53cc482728c502bb5fda7c7b" },
-    "windows-amd64": { "url": "../zg-workbench-agent/zg-workbench-agent-windows-amd64.runtime.exe", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-windows-amd64.exe", "sha256": "991382767d1e489196116387e9ba21a9c567065ed9e3dabfa700ed9745af0874" },
-    "windows-arm64": { "url": "../zg-workbench-agent/zg-workbench-agent-windows-arm64.runtime.exe", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-windows-arm64.exe", "sha256": "924b475d6bedd186c81a0e1052f169d97be128cd289f3ef5559174aba06ce8b1" }
+    "darwin-arm64": { "url": "../zg-workbench-agent/zg-workbench-agent-darwin-arm64.bin", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-darwin-arm64.zip", "sha256": "cba3530ff785bb08ea85a1ce05e3b3ede11a3e2f18a4aacddd5b1d03c3858d29" },
+    "darwin-amd64": { "url": "../zg-workbench-agent/zg-workbench-agent-darwin-amd64.bin", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-darwin-amd64.zip", "sha256": "e348b24ddea7434724c7fe18bbe34c3cf8eea4468817fc9ff3bdc51ab043b391" },
+    "windows-amd64": { "url": "../zg-workbench-agent/zg-workbench-agent-windows-amd64.runtime.exe", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-windows-amd64.exe", "sha256": "a2a882619230e6759ff849b6609fd22ae2b22ed4591140f8e8ed594f1fe9d1b6" },
+    "windows-arm64": { "url": "../zg-workbench-agent/zg-workbench-agent-windows-arm64.runtime.exe", "downloadUrl": "../zg-workbench-agent/zg-workbench-agent-windows-arm64.exe", "sha256": "6b4f43cc98febaa2f64362e97e4a54e1f6ef959a5a39aaf7c7f5c2e3513d2dcd" }
   }
 }

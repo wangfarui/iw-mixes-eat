@@ -15,6 +15,13 @@ export interface ZhaogangAiConfigCommand {
   executionLocation: ZhaogangAiExecutionLocation
 }
 
+export interface ZhaogangAiConnectionTestResult {
+  success: boolean
+  executionLocation: 'SERVER'
+  errorCode?: string
+  message: string
+}
+
 export interface ZhaogangAgentTicket {
   ticket: string
   recognitionTaskId: string

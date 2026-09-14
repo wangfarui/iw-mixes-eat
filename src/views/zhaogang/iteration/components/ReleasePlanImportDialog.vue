@@ -4,9 +4,9 @@
     title="添加发布项目"
     :width="dialogWidth"
     :close-on-click-modal="false"
-    :close-on-press-escape="!recognizing"
-    :show-close="!recognizing"
-    @closed="reset"
+    :close-on-press-escape="true"
+    :show-close="true"
+    @closed="handleClosed"
   >
     <el-tabs v-model="activeTab">
       <el-tab-pane label="手动添加" name="manual" :disabled="recognizing">
@@ -52,7 +52,13 @@
               :disabled="!selectedFile || recognizing"
               @click="recognizeSelectedImage"
             >开始识别</el-button>
+            <el-button v-if="recognizing" type="warning" @click="cancelRecognition">取消识别</el-button>
             <span class="muted">支持粘贴截图，PNG/JPEG/WebP，最大 10 MB</span>
+          </div>
+
+          <div v-if="recognizing || taskStatus === 'FAILED'" class="recognition-status" role="status" aria-live="polite">
+            <el-progress :percentage="taskProgress" :status="taskStatus === 'FAILED' ? 'exception' : undefined" />
+            <span>{{ taskMessage || '识别任务处理中' }}</span>
           </div>
 
           <div v-if="previewUrl" class="image-preview-panel">
@@ -77,7 +83,10 @@
             <span>也可以使用上方“上传图片”选择本地图片</span>
           </div>
 
-          <el-alert v-if="error" type="error" :closable="false" show-icon :title="error" />
+          <div v-if="error" class="error-row">
+            <el-alert type="error" :closable="false" show-icon :title="error" />
+            <el-button v-if="retryable" type="primary" link @click="recognizeSelectedImage">重试</el-button>
+          </div>
           <div v-if="collapsedSummary.total" class="collapsed-summary">
             <span>
               {{ nonActionableExpanded ? '已展开' : '已折叠' }} {{ collapsedSummary.total }} 条：
@@ -139,7 +148,7 @@
       </el-tab-pane>
     </el-tabs>
     <template #footer>
-      <el-button :disabled="recognizing" @click="visible = false">取消</el-button>
+      <el-button @click="closeDialog">{{ recognizing ? '后台运行' : '取消' }}</el-button>
       <el-button
         v-if="activeTab === 'image' && rows.length"
         :loading="adding"
@@ -165,14 +174,16 @@ import { ArrowDown, ArrowUp, Picture, Search, Upload } from '@element-plus/icons
 import { addTeamIterationReleasePlan } from '@/api/zhaogangIteration'
 import {
   batchAddZhaogangReleasePlans,
+  cancelZhaogangReleaseImageTask,
+  createZhaogangReleaseImageTask,
+  getZhaogangReleaseImageTask,
   getZhaogangAiConfig,
   getZhaogangPlans,
   getZhaogangProjects,
   issueZhaogangAgentTicket,
   matchZhaogangReleaseRows,
-  recognizeZhaogangReleaseImage,
 } from '@/api/zhaogang'
-import { checkZgWorkbenchAgent, getZgWorkbenchAgentPort, zgWorkbenchAgentClient } from '@/services/zgWorkbenchAgentClient'
+import { checkZgWorkbenchAgent, getZgWorkbenchAgentPort, zgWorkbenchAgentClient, type ZgWorkbenchAgentTask } from '@/services/zgWorkbenchAgentClient'
 import {
   DEFAULT_RELEASE_IMPORT_PLAN_COLUMN,
   DEFAULT_RELEASE_IMPORT_PROJECT_COLUMN,
@@ -180,8 +191,26 @@ import {
   saveReleaseImportColumnNames,
 } from '@/services/zhaogangReleaseImportPreferences'
 import { summarizeCollapsedReleaseImportRows, visibleReleaseImportRows } from '@/services/zhaogangReleaseImportRows'
+import {
+  clearStoredReleaseImportTask,
+  isReleaseImportTaskTerminal,
+  loadStoredReleaseImportTask,
+  parseAgentRecognitionRows,
+  pollReleaseImportTask,
+  releaseImportTaskPhaseLabel,
+  saveStoredReleaseImportTask,
+  shouldFallbackToLocalAgent,
+  type ReleaseImportTaskMode,
+  type StoredReleaseImportTask,
+} from '@/services/zhaogangReleaseImportTask'
 import type { ZhaogangBuildPlan, ZhaogangProject } from '@/types/zhaogang'
-import type { ZhaogangReleaseImportPreview, ZhaogangReleaseImportRow, ZhaogangReleaseImportStatus } from '@/types/zhaogangReleaseImport'
+import type {
+  ZhaogangReleaseImportPreview,
+  ZhaogangReleaseImportRow,
+  ZhaogangReleaseImportStatus,
+  ZhaogangReleaseImportTask,
+  ZhaogangReleaseImportTaskStatus,
+} from '@/types/zhaogangReleaseImport'
 import type { TeamIterationReleasePlan } from '@/types/zhaogangIteration'
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp']
@@ -203,6 +232,15 @@ const recognizing = ref(false)
 const catalogLoading = ref(false)
 const adding = ref(false)
 const error = ref('')
+const taskId = ref('')
+const taskMode = ref<ReleaseImportTaskMode>()
+const taskStatus = ref<ZhaogangReleaseImportTaskStatus>()
+const taskPhase = ref<ZhaogangReleaseImportTask['phase']>()
+const taskProgress = ref(0)
+const taskMessage = ref('')
+const retryable = ref(false)
+let pollingTaskKey = ''
+let pollingPromise: Promise<unknown> | null = null
 const manualProjectId = ref<number>()
 const manualPlanId = ref<number>()
 const manualPlans = ref<ZhaogangBuildPlan[]>([])
@@ -235,7 +273,19 @@ const releasePreviewUrl = () => {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
 }
+const clearTaskState = () => {
+  clearStoredReleaseImportTask(props.iterationId)
+  taskId.value = ''
+  taskMode.value = undefined
+  taskStatus.value = undefined
+  taskPhase.value = undefined
+  taskProgress.value = 0
+  taskMessage.value = ''
+  retryable.value = false
+  pollingTaskKey = ''
+}
 const reset = () => {
+  if (recognizing.value) return
   rows.value = []
   nonActionableExpanded.value = false
   error.value = ''
@@ -245,7 +295,11 @@ const reset = () => {
   manualPlans.value = []
   selectedFile.value = undefined
   releasePreviewUrl()
+  clearTaskState()
   if (fileInput.value) fileInput.value.value = ''
+}
+const handleClosed = () => {
+  if (!recognizing.value) reset()
 }
 const ensureCatalog = async () => {
   if (projects.value.length) return
@@ -280,6 +334,7 @@ const selectImage = (file: File) => {
   rows.value = []
   nonActionableExpanded.value = false
   error.value = ''
+  clearTaskState()
 }
 const onFileChange = (event: Event) => {
   const input = event.target as HTMLInputElement
@@ -297,60 +352,220 @@ const onPaste = (event: ClipboardEvent) => {
   event.preventDefault()
   selectImage(file)
 }
+type TaskSnapshot = Pick<ZhaogangReleaseImportTask, 'taskId' | 'status' | 'phase' | 'progress' | 'message' | 'errorCode' | 'retryable'>
+let activeTaskGeneration = 0
+
+const updateTaskView = (task: TaskSnapshot) => {
+  taskId.value = task.taskId
+  taskStatus.value = task.status
+  taskPhase.value = task.phase
+  taskProgress.value = Math.max(0, Math.min(100, Number(task.progress) || 0))
+  taskMessage.value = task.message || releaseImportTaskPhaseLabel(task.phase)
+  retryable.value = Boolean(task.retryable)
+}
+
+const taskFailure = (task: TaskSnapshot) => {
+  const failure = new Error(task.message || '截图识别失败') as Error & { errorCode?: string; retryable?: boolean }
+  failure.errorCode = task.errorCode
+  failure.retryable = task.retryable
+  return failure
+}
+
+const saveTaskReference = (mode: ReleaseImportTaskMode, id: string, executionLocation: 'AUTO' | 'SERVER' | 'LOCAL_AGENT') => {
+  taskMode.value = mode
+  taskId.value = id
+  saveStoredReleaseImportTask({
+    iterationId: props.iterationId,
+    taskId: id,
+    mode,
+    executionLocation,
+    createdAt: Date.now(),
+  })
+}
+
+const runTaskPolling = <T extends TaskSnapshot>(key: string, read: () => Promise<T>, generation: number) => {
+  if (pollingTaskKey === key && pollingPromise) return pollingPromise as Promise<T>
+  pollingTaskKey = key
+  const promise = pollReleaseImportTask(read, {
+    onSnapshot: updateTaskView,
+    isCancelled: () => generation !== activeTaskGeneration,
+    maxWaitMs: 10 * 60 * 1000,
+  })
+  pollingPromise = promise.then(value => value).finally(() => {
+    if (pollingTaskKey === key) {
+      pollingTaskKey = ''
+      pollingPromise = null
+    }
+  })
+  return pollingPromise as Promise<T>
+}
+
+const requireSuccessfulTask = <T extends TaskSnapshot>(task: T) => {
+  if (task.status === 'SUCCEEDED') return task
+  if (task.status === 'CANCELLED') throw new Error('识别任务已取消')
+  if (task.status === 'EXPIRED') throw new Error('识别任务已过期，请重新选择截图')
+  throw taskFailure(task)
+}
+
+const runServerTask = async (
+  file: File | undefined,
+  executionLocation: 'AUTO' | 'SERVER' | 'LOCAL_AGENT',
+  existingTaskId: string | undefined,
+  generation: number,
+): Promise<ZhaogangReleaseImportPreview> => {
+  const initial = existingTaskId
+    ? await getZhaogangReleaseImageTask(props.iterationId, existingTaskId)
+    : await createZhaogangReleaseImageTask(props.iterationId, file!, projectColumnName.value, planColumnName.value)
+  saveTaskReference('SERVER', initial.taskId, executionLocation)
+  updateTaskView(initial)
+  const final = isReleaseImportTaskTerminal(initial)
+    ? initial
+    : await runTaskPolling(`SERVER:${initial.taskId}`, () => getZhaogangReleaseImageTask(props.iterationId, initial.taskId), generation)
+  const completed = requireSuccessfulTask(final)
+  if (!completed.preview) throw new Error('服务端未返回截图识别结果')
+  return completed.preview
+}
+
+const runLocalTask = async (
+  file: File | undefined,
+  executionLocation: 'AUTO' | 'SERVER' | 'LOCAL_AGENT',
+  existingTaskId: string | undefined,
+  generation: number,
+): Promise<ZhaogangReleaseImportPreview> => {
+  const state = await checkZgWorkbenchAgent()
+  if (!state.running || !state.compatible || !state.health?.capabilities?.includes('ai-vision')) {
+    throw new Error('本机 Agent 未运行、版本过旧或不支持 AI 识别，请前往设置处理')
+  }
+  const client = zgWorkbenchAgentClient(getZgWorkbenchAgentPort())
+  let initial: ZgWorkbenchAgentTask
+  if (existingTaskId) {
+    initial = await client.aiVisionTask(existingTaskId)
+  } else {
+    const ticket = await issueZhaogangAgentTicket(props.iterationId, projectColumnName.value, planColumnName.value)
+    initial = await client.aiVisionStartTask(ticket.ticket, file!)
+  }
+  saveTaskReference('LOCAL_AGENT', initial.taskId, executionLocation)
+  updateTaskView(initial)
+  const final = isReleaseImportTaskTerminal(initial)
+    ? initial
+    : await runTaskPolling(`LOCAL_AGENT:${initial.taskId}`, () => client.aiVisionTask(initial.taskId), generation)
+  const completed = requireSuccessfulTask(final)
+  const rows = parseAgentRecognitionRows(completed.result?.text || '', projectColumnName.value, planColumnName.value)
+  return matchZhaogangReleaseRows(props.iterationId, rows)
+}
+
+const runServerWithFallback = async (
+  file: File | undefined,
+  executionLocation: 'AUTO' | 'SERVER' | 'LOCAL_AGENT',
+  existingTaskId: string | undefined,
+  generation: number,
+) => {
+  try {
+    return await runServerTask(file, executionLocation, existingTaskId, generation)
+  } catch (serverError) {
+    const errorValue = serverError as Error & { errorCode?: string }
+    if (!shouldFallbackToLocalAgent(executionLocation, errorValue.errorCode, Boolean(file))) throw serverError
+    clearTaskState()
+    return runLocalTask(file, 'AUTO', undefined, generation)
+  }
+}
+
+const applyPreview = async (preview: ZhaogangReleaseImportPreview) => {
+  nonActionableExpanded.value = false
+  rows.value = preview.items
+  for (const row of rows.value) if (row.projectId) await loadPlans(row.projectId)
+  clearStoredReleaseImportTask(props.iterationId)
+  taskStatus.value = 'SUCCEEDED'
+  taskPhase.value = 'COMPLETED'
+  taskProgress.value = 100
+  taskMessage.value = '识别完成，请确认匹配结果'
+  retryable.value = false
+}
+
 const recognizeSelectedImage = async () => {
   const file = selectedFile.value
   if (!file || recognizing.value) return
   saveColumnNames()
+  const generation = ++activeTaskGeneration
+  clearTaskState()
   recognizing.value = true
   error.value = ''
   rows.value = []
   try {
     await ensureCatalog()
     const config = await getZhaogangAiConfig()
-    let preview: ZhaogangReleaseImportPreview
-    if (config.executionLocation === 'LOCAL_AGENT') {
-      preview = await recognizeWithLocalAgent(file)
-    } else {
-      try {
-        preview = await recognizeZhaogangReleaseImage(props.iterationId, file, projectColumnName.value, planColumnName.value)
-      } catch (serverError) {
-        const message = serverError instanceof Error ? serverError.message : ''
-        if (config.executionLocation !== 'AUTO' || !/网络|连接|超时|不可达|请求失败/i.test(message)) throw serverError
-        preview = await recognizeWithLocalAgent(file)
-      }
-    }
-    nonActionableExpanded.value = false
-    rows.value = preview.items
-    for (const row of rows.value) if (row.projectId) await loadPlans(row.projectId)
+    const preview = config.executionLocation === 'LOCAL_AGENT'
+      ? await runLocalTask(file, config.executionLocation, undefined, generation)
+      : await runServerWithFallback(file, config.executionLocation, undefined, generation)
+    if (generation === activeTaskGeneration) await applyPreview(preview)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '截图识别失败'
+    if (generation === activeTaskGeneration) {
+      const failure = err as Error & { retryable?: boolean }
+      error.value = failure.message || '截图识别失败'
+      retryable.value = Boolean(failure.retryable)
+      taskStatus.value = 'FAILED'
+    }
+  } finally {
+    if (generation === activeTaskGeneration) recognizing.value = false
+  }
+}
+
+const resumeStoredTask = async () => {
+  if (recognizing.value || pollingPromise) return
+  const stored = loadStoredReleaseImportTask(props.iterationId)
+  if (!stored) return
+  activeTab.value = 'image'
+  const generation = ++activeTaskGeneration
+  recognizing.value = true
+  error.value = ''
+  taskMode.value = stored.mode
+  taskId.value = stored.taskId
+  taskMessage.value = '正在恢复识别任务'
+  try {
+    await ensureCatalog()
+    const preview = stored.mode === 'SERVER'
+      ? await runServerWithFallback(selectedFile.value, stored.executionLocation, stored.taskId, generation)
+      : await runLocalTask(selectedFile.value, stored.executionLocation, stored.taskId, generation)
+    if (generation === activeTaskGeneration) await applyPreview(preview)
+  } catch (err) {
+    if (generation === activeTaskGeneration) {
+      const failure = err as Error & { retryable?: boolean }
+      error.value = failure.message || '恢复截图识别任务失败'
+      retryable.value = Boolean(failure.retryable)
+      taskStatus.value = 'FAILED'
+    }
+  } finally {
+    if (generation === activeTaskGeneration) recognizing.value = false
+  }
+}
+
+const cancelRecognition = async () => {
+  if (!recognizing.value || !taskId.value || !taskMode.value) return
+  const id = taskId.value
+  const mode = taskMode.value
+  ++activeTaskGeneration
+  try {
+    if (mode === 'SERVER') await cancelZhaogangReleaseImageTask(props.iterationId, id)
+    else await zgWorkbenchAgentClient(getZgWorkbenchAgentPort()).aiVisionCancelTask(id)
+    error.value = ''
+    taskStatus.value = 'CANCELLED'
+    taskPhase.value = taskPhase.value || 'COMPLETED'
+    taskProgress.value = 100
+    taskMessage.value = '识别任务已取消'
+    retryable.value = false
+    clearStoredReleaseImportTask(props.iterationId)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '取消识别失败'
+    retryable.value = true
   } finally {
     recognizing.value = false
   }
 }
-const recognizeWithLocalAgent = async (file: File): Promise<ZhaogangReleaseImportPreview> => {
-  const state = await checkZgWorkbenchAgent()
-  if (!state.running || !state.compatible || !state.health?.capabilities?.includes('ai-vision')) {
-    throw new Error('本机 Agent 未运行、版本过旧或不支持 AI 识别，请前往设置处理')
-  }
-  const ticket = await issueZhaogangAgentTicket(props.iterationId, projectColumnName.value, planColumnName.value)
-  const result = await zgWorkbenchAgentClient(getZgWorkbenchAgentPort()).aiVisionRecognize(ticket.ticket, file)
-  const text = result.text || ''
-  let parsed: unknown
-  try { parsed = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) } catch { throw new Error('本机 Agent 返回的 AI 识别结果不是有效 JSON') }
-  const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' && Array.isArray((parsed as { rows?: unknown[] }).rows) ? (parsed as { rows: unknown[] }).rows : [])
-  if (!items.length) throw new Error('AI 未识别到可用的发布项目行')
-  return matchZhaogangReleaseRows(props.iterationId, items.map((item) => {
-    const row = item as Record<string, unknown>
-    return {
-      requirement: String(row.requirement || row.project || ''),
-      ops: String(row.ops || row.systemOps || row[projectColumnName.value] || row[DEFAULT_RELEASE_IMPORT_PROJECT_COLUMN] || ''),
-      systemName: String(row.systemName || row.system || row[planColumnName.value] || row[DEFAULT_RELEASE_IMPORT_PLAN_COLUMN] || ''),
-      projectHint: String(row.projectHint || row.codingProject || row.projectName || ''),
-      planHint: String(row.planHint || row.buildPlan || row.planName || ''),
-    }
-  }))
+
+const closeDialog = () => {
+  visible.value = false
 }
+
 const changeProject = async (row: ZhaogangReleaseImportRow) => {
   row.planId = null
   row.planName = ''
@@ -430,6 +645,7 @@ watch(visible, (opened) => {
   if (!opened) return
   loadColumnNames()
   ensureCatalog().catch(err => { error.value = err instanceof Error ? err.message : 'CODING 项目目录加载失败' })
+  void resumeStoredTask()
 })
 onMounted(() => document.addEventListener('paste', onPaste))
 onBeforeUnmount(() => {
@@ -446,6 +662,10 @@ onBeforeUnmount(() => {
 .column-config :deep(.el-form-item) { margin-bottom: 14px; }
 .import-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 .muted, .status-message, .image-meta span { color: #7b8799; font-size: 13px; }
+.recognition-status { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 12px; margin-bottom: 14px; color: #606266; font-size: 13px; }
+.recognition-status :deep(.el-progress) { min-width: 180px; }
+.error-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.error-row :deep(.el-alert) { flex: 1; }
 .paste-zone { display: flex; min-height: 150px; align-items: center; justify-content: center; flex-direction: column; gap: 8px; margin-bottom: 14px; color: #4a5b73; background: #f7f9fc; border: 1px dashed #b8c4d5; }
 .image-preview-panel { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 16px; min-height: 180px; margin-bottom: 14px; padding: 12px; border: 1px solid #dcdfe6; background: #f7f9fc; }
 .image-preview { width: 100%; height: 230px; cursor: zoom-in; background: #fff; }
@@ -461,6 +681,7 @@ onBeforeUnmount(() => {
   .column-config { grid-template-columns: 1fr; gap: 0; }
   .import-toolbar { align-items: flex-start; }
   .muted { flex-basis: 100%; }
+  .recognition-status { grid-template-columns: 1fr; gap: 6px; }
   .image-preview-panel { grid-template-columns: 1fr; }
   .image-preview { height: 190px; }
   .image-meta { gap: 4px; }

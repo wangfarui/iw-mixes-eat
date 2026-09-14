@@ -98,7 +98,7 @@
         </el-tag>
       </header>
       <el-form label-position="top" class="preferences-form">
-        <el-form-item label="API URL"><el-input v-model="aiForm.apiUrl" placeholder="https://host/v1/chat/completions" /></el-form-item>
+        <el-form-item label="API URL"><el-input v-model="aiForm.apiUrl" placeholder="https://host" /></el-form-item>
         <el-form-item label="API Key">
           <el-input
             v-model="aiForm.apiKey"
@@ -197,6 +197,7 @@ import {
   getZhaogangAiConfig,
   getZhaogangK8sToken,
   getZhaogangK8sTokenStatus,
+  issueZhaogangAiTestTicket,
   saveZhaogangAiConfig,
   saveZhaogangK8sToken,
   testZhaogangAiConfig
@@ -210,6 +211,7 @@ import {
   type ZgWorkbenchAgentUpdateInfo
 } from '@/services/zgWorkbenchAgentClient'
 import { canStartZgWorkbenchAgentUpdate, shouldCheckZgWorkbenchAgentUpdate } from '@/services/zgWorkbenchAgentUpdate'
+import { createZhaogangAiConnectionTestImage, runZhaogangAiConnectionTest } from '@/services/zhaogangAiConnectionTest'
 import type { ZhaogangAiExecutionLocation } from '@/types/zhaogangAi'
 import type { ZgK8sEnvironment } from '@/types/zhaogangService'
 
@@ -450,8 +452,21 @@ const deleteK8s = async (environment: ZgK8sEnvironment) => {
 const testAi = async () => {
   aiTesting.value = true
   try {
-    await testZhaogangAiConfig({ ...aiForm.value })
-    ElMessage.success('AI 连接成功')
+    const command = { ...aiForm.value }
+    const location = await runZhaogangAiConnectionTest(
+      command.executionLocation,
+      () => testZhaogangAiConfig(command),
+      async () => {
+        const state = await checkZgWorkbenchAgent()
+        agentState.value = state
+        if (!state.running || !state.compatible || !state.health?.capabilities?.includes('ai-vision')) {
+          throw new Error('本机 Agent 未运行、版本过旧或不支持 AI 识别，请先处理本机 Agent')
+        }
+        const ticket = await issueZhaogangAiTestTicket(command)
+        await client().aiVisionRecognize(ticket.ticket, createZhaogangAiConnectionTestImage())
+      },
+    )
+    ElMessage.success(`AI 连接成功（${location === 'SERVER' ? '服务器' : '本机 Agent'}）`)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : 'AI 连接失败')
   } finally {

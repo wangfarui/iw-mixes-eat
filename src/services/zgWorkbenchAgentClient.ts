@@ -8,6 +8,24 @@ import type {
   ZgK8sPodPage,
 } from '@/types/zhaogangService'
 
+export type ZgWorkbenchAgentTaskStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'EXPIRED'
+export type ZgWorkbenchAgentTaskPhase = 'QUEUED' | 'WAITING_AI' | 'MATCHING' | 'COMPLETED'
+export interface ZgWorkbenchAgentTaskResult {
+  text?: string
+  response?: unknown
+  model?: string
+}
+export interface ZgWorkbenchAgentTask {
+  taskId: string
+  status: ZgWorkbenchAgentTaskStatus
+  phase: ZgWorkbenchAgentTaskPhase
+  progress: number
+  result?: ZgWorkbenchAgentTaskResult | null
+  errorCode?: string
+  message?: string
+  retryable?: boolean
+}
+
 export const WORKBENCH_AGENT_PORT_KEY = 'zhaogang:zg-workbench-agent-port'
 const LEGACY_PORT_KEY = 'zhaogang:zg-k8s-agent-port'
 const DEFAULT_PORT = 28731
@@ -144,6 +162,21 @@ export const zgWorkbenchAgentClient = (port = getZgWorkbenchAgentPort()) => {
       if (!response.ok) throw new Error(payload?.message || `Agent AI 识别失败（${response.status}）`)
       return payload?.result || {}
     },
+    aiVisionStartTask: async (ticket: string, file: File) => {
+      const form = new FormData()
+      form.append('ticket', ticket)
+      form.append('image', file)
+      const response = await fetch(`http://127.0.0.1:${port}/v1/ai-vision/tasks`, {
+        method: 'POST',
+        body: form,
+        credentials: 'omit',
+      })
+      const payload = await response.json().catch(() => undefined) as ZgWorkbenchAgentTask | { message?: string } | undefined
+      if (!response.ok) throw new Error((payload as { message?: string } | undefined)?.message || `Agent AI 任务创建失败（${response.status}）`)
+      return payload as ZgWorkbenchAgentTask
+    },
+    aiVisionTask: (taskId: string) => request<ZgWorkbenchAgentTask>(`/v1/ai-vision/tasks/${encodeURIComponent(taskId)}`),
+    aiVisionCancelTask: (taskId: string) => request<ZgWorkbenchAgentTask>(`/v1/ai-vision/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' }),
     autostart: (enabled: boolean) => request<{ enabled: boolean }>(`/v1/autostart?enabled=${enabled}`, { method: 'POST' }),
     updateCheck: () => request<ZgWorkbenchAgentUpdateInfo>('/v1/update/check'),
     update: () => request<{ accepted: boolean; status?: string }>('/v1/update', { method: 'POST' }),

@@ -41,6 +41,31 @@ export interface ZhaogangReleaseImportPreview {
   items: ZhaogangReleaseImportRow[]
 }
 
+export type ZhaogangReleaseImportTaskStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'EXPIRED'
+
+export type ZhaogangReleaseImportTaskPhase =
+  | 'QUEUED'
+  | 'WAITING_AI'
+  | 'MATCHING'
+  | 'COMPLETED'
+
+export interface ZhaogangReleaseImportTask {
+  taskId: string
+  status: ZhaogangReleaseImportTaskStatus
+  phase: ZhaogangReleaseImportTaskPhase
+  progress: number
+  preview?: ZhaogangReleaseImportPreview | null
+  errorCode?: string
+  message?: string
+  retryable?: boolean
+}
+
 export interface ZhaogangReleaseBatchAddResult {
   successCount: number
   failureCount: number
